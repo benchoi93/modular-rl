@@ -36,7 +36,8 @@ def registerEnvs(env_names, max_episode_steps, custom_xml):
     # existing envs
     if not custom_xml:
         for name in env_names:
-            paths_to_register.append(os.path.join(XML_DIR, "{}.xml".format(name)))
+            paths_to_register.append(os.path.join(
+                XML_DIR, "{}.xml".format(name)))
     # custom envs
     else:
         if os.path.isfile(custom_xml):
@@ -52,18 +53,81 @@ def registerEnvs(env_names, max_episode_steps, custom_xml):
         # create a copy of modular environment for custom xml model
         if not os.path.exists(os.path.join(ENV_DIR, '{}.py'.format(env_name))):
             # create a duplicate of gym environment file for each env (necessary for avoiding bug in gym)
-            copyfile(BASE_MODULAR_ENV_PATH, '{}.py'.format(os.path.join(ENV_DIR, env_name)))
+            copyfile(BASE_MODULAR_ENV_PATH, '{}.py'.format(
+                os.path.join(ENV_DIR, env_name)))
         params = {'xml': os.path.abspath(xml)}
         # register with gym
         register(id=("%s-v0" % env_name),
                  max_episode_steps=max_episode_steps,
                  entry_point="environments.%s:ModularEnv" % env_file,
                  kwargs=params)
-        env = wrappers.IdentityWrapper(gym.make("environments:%s-v0" % env_name))
+        env = wrappers.IdentityWrapper(
+            gym.make("environments:%s-v0" % env_name))
         # the following is the same for each env
         limb_obs_size = env.limb_obs_size
         max_action = env.max_action
     return limb_obs_size, max_action
+
+
+def registerEnvsCACC(envs_train_names, num_agents_list, max_episode_steps, args):
+    train_envs = []
+
+    def make_env(kwargs, max_length):
+
+        def _init():
+            env = wrappers.ModularEnvWrapper(
+                multiCACC(**kwargs), obs_max_len=max_length)
+            # if seed is not None:
+            #     env.seed(seed + rank)
+            #     for x in env.action_space:
+            #         x.seed(seed + rank)
+            return env
+
+        return _init
+
+    max_length = 3 * max(num_agents_list)
+
+    for i in range(len(envs_train_names)):
+        env_name = envs_train_names[i]
+        num_agents = num_agents_list[i]
+
+        from marlcacc.rlenv.multiCACCenv import multiCACC
+        from marlcacc.rlenv.state_type import state_minmax_lookup
+
+        kwargs = {"num_agents": num_agents,
+                  "initial_position": np.cumsum(np.ones(num_agents)) * args.init_spacing,
+                  "initial_speed": np.ones(num_agents) * args.init_speed,
+                  "dt": 0.1,
+                  "acc_bound": (-1 * args.acc_bound, args.acc_bound),
+                  "adj_amp": args.adj_amp,
+                  "track_length": args.track_length,
+                  "max_speed": args.max_speed,
+                  "coefs": [args.speed_reward_coef,
+                            args.safe_reward_coef,
+                            args.jerk_reward_coef,
+                            args.acc_reward_coef,
+                            args.energy_reward_coef],
+                  "shared_reward": args.shared_reward,
+                  "config": args,
+                  "state_type": ["speed", "spacing", "relative_speed"],
+                  "state_minmax_lookup": state_minmax_lookup,
+                  }
+
+        # # register with gym
+        # register(id=("%s-v0" % env_name),
+        #          max_episode_steps=max_episode_steps,
+        #          entry_point="cacc_environments.%s:multiCACC" % env_name,
+        #          kwargs=kwargs)
+        # env = wrappers.IdentityWrapper(
+        #     gym.make("cacc_environments:%s-v0" % env_name))
+        env = wrappers.IdentityWrapper(multiCACC(**kwargs))
+
+        train_envs.append(make_env(kwargs, max_length))
+
+    # the following is the same for each env
+    limb_obs_size = env.limb_obs_size
+    max_action = env.max_action
+    return limb_obs_size, max_action, train_envs
 
 
 def quat2expmap(q):
@@ -78,22 +142,24 @@ def quat2expmap(q):
     Raises
     ValueError if the l2 norm of the quaternion is not close to 1
     """
-    if (np.abs(np.linalg.norm(q)-1)>1e-3):
+    if (np.abs(np.linalg.norm(q)-1) > 1e-3):
         raise(ValueError, "quat2expmap: input quaternion is not norm 1")
 
     sinhalftheta = np.linalg.norm(q[1:])
     coshalftheta = q[0]
-    r0 = np.divide( q[1:], (np.linalg.norm(q[1:]) + np.finfo(np.float32).eps));
-    theta = 2 * np.arctan2( sinhalftheta, coshalftheta )
-    theta = np.mod( theta + 2*np.pi, 2*np.pi )
+    r0 = np.divide(q[1:], (np.linalg.norm(q[1:]) + np.finfo(np.float32).eps))
+    theta = 2 * np.arctan2(sinhalftheta, coshalftheta)
+    theta = np.mod(theta + 2*np.pi, 2*np.pi)
     if theta > np.pi:
-        theta =  2 * np.pi - theta
-        r0    = -r0
+        theta = 2 * np.pi - theta
+        r0 = -r0
     r = r0 * theta
     return r
 
 # replay buffer: expects tuples of (state, next_state, action, reward, done)
 # modified from https://github.com/openai/baselines/blob/master/baselines/deepq/replay_buffer.py
+
+
 class ReplayBuffer(object):
     def __init__(self, max_size=1e6, slicing_size=None):
         self.storage = []
@@ -107,8 +173,10 @@ class ReplayBuffer(object):
 
     def add(self, data):
         if self.slicing_size is None:
-            self.slicing_size = [data[0].size, data[1].size, data[2].size, 1, 1]
-        data = np.concatenate([data[0], data[1], data[2], [data[3]], [data[4]]])
+            self.slicing_size = [data[0].size,
+                                 data[1].size, data[2].size, 1, 1]
+        data = np.concatenate(
+            [data[0], data[1], data[2], [data[3]], [data[4]]])
         if len(self.storage) == self.max_size:
             self.storage[int(self.ptr)] = data
             self.ptr = (self.ptr + 1) % self.max_size
@@ -122,10 +190,14 @@ class ReplayBuffer(object):
         for i in ind:
             data = self.storage[i]
             X = data[:self.slicing_size[0]]
-            Y = data[self.slicing_size[0]:self.slicing_size[0] + self.slicing_size[1]]
-            U = data[self.slicing_size[0] + self.slicing_size[1]:self.slicing_size[0] + self.slicing_size[1] + self.slicing_size[2]]
-            R = data[self.slicing_size[0] + self.slicing_size[1] + self.slicing_size[2]:self.slicing_size[0] + self.slicing_size[1] + self.slicing_size[2] + self.slicing_size[3]]
-            D = data[self.slicing_size[0] + self.slicing_size[1] + self.slicing_size[2] + self.slicing_size[3]:]
+            Y = data[self.slicing_size[0]
+                :self.slicing_size[0] + self.slicing_size[1]]
+            U = data[self.slicing_size[0] + self.slicing_size[1]
+                :self.slicing_size[0] + self.slicing_size[1] + self.slicing_size[2]]
+            R = data[self.slicing_size[0] + self.slicing_size[1] + self.slicing_size[2]
+                :self.slicing_size[0] + self.slicing_size[1] + self.slicing_size[2] + self.slicing_size[3]]
+            D = data[self.slicing_size[0] + self.slicing_size[1] +
+                     self.slicing_size[2] + self.slicing_size[3]:]
             x.append(np.array(X, copy=False))
             y.append(np.array(Y, copy=False))
             u.append(np.array(U, copy=False))
@@ -133,7 +205,7 @@ class ReplayBuffer(object):
             d.append(np.array(D, copy=False))
 
         return (np.array(x), np.array(y), np.array(u),
-                    np.array(r).reshape(-1, 1), np.array(d).reshape(-1, 1))
+                np.array(r).reshape(-1, 1), np.array(d).reshape(-1, 1))
 
 
 class MLPBase(nn.Module):
@@ -166,13 +238,21 @@ def getGraphStructure(xml_file):
     parents = []
     try:
         root = xml['mujoco']['worldbody']['body']
-        assert not isinstance(root, list), 'worldbody can only contain one body (torso) for the current implementation, but found {}'.format(root)
+        assert not isinstance(
+            root, list), 'worldbody can only contain one body (torso) for the current implementation, but found {}'.format(root)
     except:
-        raise Exception("The given xml file does not follow the standard MuJoCo format.")
+        raise Exception(
+            "The given xml file does not follow the standard MuJoCo format.")
     preorder(root)
     # signal message flipping for flipped walker morphologies
     if 'walker' in os.path.basename(xml_file) and 'flipped' in os.path.basename(xml_file):
         parents[0] = -2
+    return parents
+
+
+def getGraphStructureCACC(num_agents):
+    """Traverse the given xml file as a tree by pre-order and return the graph structure as a parents list"""
+    parents = [-1] + list(range(num_agents-1))
     return parents
 
 
@@ -182,7 +262,8 @@ def getGraphJoints(xml_file):
     def preorder(b):
         if 'joint' in b:
             if isinstance(b['joint'], list) and b['@name'] != 'torso':
-                raise Exception("The given xml file does not follow the standard MuJoCo format.")
+                raise Exception(
+                    "The given xml file does not follow the standard MuJoCo format.")
             elif not isinstance(b['joint'], list):
                 b['joint'] = [b['joint']]
             joints.append([b['@name']])
@@ -200,7 +281,8 @@ def getGraphJoints(xml_file):
     try:
         root = xml['mujoco']['worldbody']['body']
     except:
-        raise Exception("The given xml file does not follow the standard MuJoCo format.")
+        raise Exception(
+            "The given xml file does not follow the standard MuJoCo format.")
     preorder(root)
     return joints
 
